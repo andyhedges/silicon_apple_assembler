@@ -97,7 +97,7 @@ _main:
     mov sp, x9
 
     // ---- Warm-up phase ----
-    mov x21, #{warmup_count}
+    {load_warmup_count}
     cbz x21, _harness_warmup_done
 
 _harness_warmup_loop:
@@ -109,7 +109,7 @@ _harness_warmup_loop:
 _harness_warmup_done:
 
     // ---- Timed phase ----
-    mov x21, #{measured_count}
+    {load_measured_count}
     cbz x21, _harness_bench_done
     adrp x23, _timing_buffer@PAGE
     add x23, x23, _timing_buffer@PAGEOFF
@@ -134,7 +134,7 @@ _harness_bench_done:
     // ---- Compute statistics ----
     adrp x23, _timing_buffer@PAGE
     add x23, x23, _timing_buffer@PAGEOFF
-    mov x21, #{measured_count}
+    {load_measured_count_x21}
 
     cbz x21, _harness_no_stats
 
@@ -618,10 +618,44 @@ _harness_print_newline:
         input_data = generate_input_data(inputs),
         load_inputs_indented = indent(&load_inputs, "    "),
         entrypoint = entrypoint,
-        warmup_count = warmup_count,
-        measured_count = measured_count,
+        load_warmup_count = load_u64_to_reg("x21", warmup_count),
+        load_measured_count = load_u64_to_reg("x21", measured_count),
+        load_measured_count_x21 = load_u64_to_reg("x21", measured_count),
         timing_buffer_size = measured_count.max(1) * 8,
     )
+}
+
+/// Generate ARM64 instructions to load a u64 value into a register.
+/// Uses movz/movk pairs for values that don't fit in a single mov immediate.
+fn load_u64_to_reg(reg: &str, value: u64) -> String {
+    if value <= 0xFFFF {
+        format!("mov {}, #{}", reg, value)
+    } else if value <= 0xFFFF_FFFF {
+        let lo = value & 0xFFFF;
+        let hi = (value >> 16) & 0xFFFF;
+        format!(
+            "movz {reg}, #0x{lo:x}\n    movk {reg}, #0x{hi:x}, lsl #16",
+            reg = reg,
+            lo = lo,
+            hi = hi
+        )
+    } else {
+        let w0 = value & 0xFFFF;
+        let w1 = (value >> 16) & 0xFFFF;
+        let w2 = (value >> 32) & 0xFFFF;
+        let w3 = (value >> 48) & 0xFFFF;
+        let mut parts = vec![format!("movz {}, #0x{:x}", reg, w0)];
+        if w1 != 0 {
+            parts.push(format!("movk {}, #0x{:x}, lsl #16", reg, w1));
+        }
+        if w2 != 0 {
+            parts.push(format!("movk {}, #0x{:x}, lsl #32", reg, w2));
+        }
+        if w3 != 0 {
+            parts.push(format!("movk {}, #0x{:x}, lsl #48", reg, w3));
+        }
+        parts.join("\n    ")
+    }
 }
 
 /// Generate .data section entries for input values
@@ -677,7 +711,9 @@ mod tests {
         assert!(harness.contains(".global _main"));
         assert!(harness.contains("bl _user_entry"));
         assert!(harness.contains("mrs x20, cntvct_el0"));
-        assert!(harness.contains("#100"));
+        // warmup = 100, measured = 900 — both fit in 16-bit mov
+        assert!(harness.contains("mov x21, #100"));
+        assert!(harness.contains("mov x21, #900"));
     }
 
     #[test]
@@ -713,5 +749,14 @@ mod tests {
         assert!(!harness.contains("re-check"));
         assert!(!harness.contains("Actually"));
         assert!(!harness.contains("Wait,"));
+    }
+
+    #[test]
+    fn test_generate_harness_large_iterations() {
+        let inputs = HashMap::new();
+        let harness = generate_harness("_user_entry", &inputs, 1_000_000);
+        // warmup = 100000, measured = 900000 — need movz/movk
+        assert!(harness.contains("movz x21"));
+        assert!(harness.contains("movk x21"));
     }
 }
