@@ -199,11 +199,16 @@ async fn handle_run(
     #[cfg(unix)]
     {
         if exec_result.exit_code.is_none() && !exec_result.killed_by_timeout {
+            let msg = if exec_result.stderr.is_empty() {
+                "Process terminated by signal".to_string()
+            } else {
+                format!("Process terminated by signal. stderr: {}", exec_result.stderr.trim())
+            };
             info!(job_id = %job_id, "Process killed by signal");
             return (
                 StatusCode::OK,
                 Json(RunResponse::runtime_error(
-                    "Process terminated by signal",
+                    &msg,
                     &exec_result.stdout,
                 )),
             );
@@ -212,11 +217,16 @@ async fn handle_run(
 
     if let Some(code) = exec_result.exit_code {
         if code != 0 {
+            let msg = if exec_result.stderr.is_empty() {
+                format!("Process exited with code {}", code)
+            } else {
+                format!("Process exited with code {}. stderr: {}", code, exec_result.stderr.trim())
+            };
             info!(job_id = %job_id, exit_code = code, "Process exited with non-zero code");
             return (
                 StatusCode::OK,
                 Json(RunResponse::runtime_error(
-                    &format!("Process exited with code {}", code),
+                    &msg,
                     &exec_result.stdout,
                 )),
             );
