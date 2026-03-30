@@ -1,0 +1,255 @@
+openapi: 3.1.0
+info:
+  title: ARM64 Assembly Sandbox & Benchmarking API
+  version: 1.1.0
+  description: >
+    A web API that accepts user-submitted ARM64v8 (AArch64) assembly source code,
+    compiles it, executes it in a restricted sandbox on Apple Silicon hardware,
+    and returns the output and benchmark results.
+
+servers:
+  - url: http://localhost:80
+    description: Local development server
+
+security:
+  - BearerAuth: []
+
+paths:
+  /run:
+    post:
+      summary: Compile and execute ARM64 assembly
+      description: >
+        Accepts ARM64 assembly source code, runs static analysis, compiles it
+        with a benchmarking harness, executes it in a sandboxed environment,
+        and returns the output and timing statistics.
+      operationId: runAssembly
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RunRequest'
+      responses:
+        '200':
+          description: >
+            Execution completed. Check the `status` field to distinguish success
+            (`ok`) from user-code failure (`error` with `RUNTIME_ERROR` or `TIMEOUT`).
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/SuccessResponse'
+                  - $ref: '#/components/schemas/RuntimeErrorResponse'
+        '400':
+          description: >
+            Request validation, static analysis, compile, or binary verification error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CompileErrorResponse'
+        '401':
+          description: Missing or invalid API key.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          description: Rate limit exceeded.
+          headers:
+            Retry-After:
+              schema:
+                type: integer
+              description: Seconds until the next request is allowed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Execution slot is occupied by another benchmark.
+          headers:
+            Retry-After:
+              schema:
+                type: integer
+              description: Conservative upper bound on seconds until the slot is free.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SlotBusyResponse'
+        '500':
+          description: Internal server error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      description: API key passed as a Bearer token.
+
+  schemas:
+    RunRequest:
+      type: object
+      required:
+        - source
+      properties:
+        source:
+          type: string
+          description: ARM64 assembly source code.
+          maxLength: 65536
+        entrypoint:
+          type: string
+          description: >
+            Label name the harness calls. Must match `^_[a-zA-Z_]\w*$`.
+            The leading underscore is required (macOS linker convention).
+          default: _user_entry
+          pattern: '^_[a-zA-Z_]\w*$'
+        inputs:
+          type: object
+          description: >
+            Input register values. Keys must be x0–x7.
+          additionalProperties:
+            type: integer
+            format: int64
+          example:
+            x0: 42
+            x1: 17
+        iterations:
+          type: integer
+          description: Number of benchmark iterations.
+          minimum: 1
+          maximum: 1000000
+          default: 1
+        timeout_seconds:
+          type: integer
+          description: Wall-clock timeout in seconds.
+          minimum: 1
+          maximum: 30
+          default: 10
+
+    SuccessResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          const: ok
+        output:
+          $ref: '#/components/schemas/OutputData'
+        benchmark:
+          $ref: '#/components/schemas/BenchmarkStats'
+
+    RuntimeErrorResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          const: error
+        error_code:
+          type: string
+          enum:
+            - RUNTIME_ERROR
+            - TIMEOUT
+        message:
+          type: string
+        output:
+          type: object
+          properties:
+            stdout:
+              type: string
+
+    CompileErrorResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          const: error
+        error_code:
+          type: string
+          enum:
+            - STATIC_ANALYSIS_FAILED
+            - COMPILE_ERROR
+            - BINARY_VERIFICATION_FAILED
+            - VALIDATION_ERROR
+        message:
+          type: string
+        detail:
+          type: object
+          properties:
+            line:
+              type: integer
+              description: Line number of the offending instruction.
+            instruction:
+              type: string
+              description: The forbidden instruction or pattern.
+
+    SlotBusyResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          const: error
+        error_code:
+          type: string
+          const: EXECUTION_SLOT_BUSY
+        message:
+          type: string
+        retry_after_seconds:
+          type: integer
+          description: Conservative upper bound on seconds until the slot is free.
+
+    ErrorResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          const: error
+        error_code:
+          type: string
+        message:
+          type: string
+
+    OutputData:
+      type: object
+      properties:
+        stdout:
+          type: string
+          description: Captured standard output from harness print helpers.
+        return_value:
+          type: integer
+          format: int64
+          description: Value in x0 after the final measured iteration.
+        registers:
+          type: object
+          description: Register values after execution.
+          additionalProperties:
+            type: integer
+            format: int64
+
+    BenchmarkStats:
+      type: object
+      properties:
+        iterations:
+          type: integer
+          description: Number of measured iterations (warm-up excluded).
+        total_ns:
+          type: integer
+          description: Sum of all measured iterations in nanoseconds.
+        mean_ns:
+          type: integer
+          description: Arithmetic mean per measured iteration in nanoseconds.
+        median_ns:
+          type: integer
+          description: Median per measured iteration in nanoseconds.
+        min_ns:
+          type: integer
+          description: Fastest measured iteration in nanoseconds.
+        max_ns:
+          type: integer
+          description: Slowest measured iteration in nanoseconds.
+        stddev_ns:
+          type: integer
+          description: Standard deviation across measured iterations in nanoseconds.
