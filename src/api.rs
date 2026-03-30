@@ -20,12 +20,17 @@ use crate::wire_format;
 pub struct AppState {
     pub rate_limiter: crate::rate_limiter::RateLimiter,
     pub execution_slot: Arc<ExecutionSlot>,
+    /// The expected Bearer token. If None, any non-empty token is accepted.
+    pub bearer_token: Option<String>,
 }
 
-pub fn create_router() -> Router {
+/// Create a router with a specific required Bearer token.
+/// Requests must include `Authorization: Bearer <token>` matching this value.
+pub fn create_router_with_token(token: &str) -> Router {
     let state = Arc::new(AppState {
         rate_limiter: crate::rate_limiter::RateLimiter::new(),
         execution_slot: Arc::new(ExecutionSlot::new()),
+        bearer_token: Some(token.to_string()),
     });
 
     Router::new()
@@ -33,13 +38,40 @@ pub fn create_router() -> Router {
         .with_state(state)
 }
 
-/// Extract API key from Authorization header
-fn extract_api_key(headers: &HeaderMap) -> Option<String> {
-    headers
+/// Create a router that accepts any non-empty Bearer token (for testing).
+pub fn create_router() -> Router {
+    let state = Arc::new(AppState {
+        rate_limiter: crate::rate_limiter::RateLimiter::new(),
+        execution_slot: Arc::new(ExecutionSlot::new()),
+        bearer_token: None,
+    });
+
+    Router::new()
+        .route("/run", post(handle_run))
+        .with_state(state)
+}
+
+/// Extract and validate API key from Authorization header.
+/// Returns the key if valid, or None if missing/invalid/mismatched.
+fn validate_api_key(headers: &HeaderMap, expected_token: &Option<String>) -> Option<String> {
+    let key = headers
         .get("authorization")
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.strip_prefix("Bearer "))
-        .map(|s| s.to_string())
+        .map(|s| s.to_string())?;
+
+    if key.is_empty() {
+        return None;
+    }
+
+    // If an expected token is configured, the provided key must match
+    if let Some(expected) = expected_token {
+        if key != *expected {
+            return None;
+        }
+    }
+
+    Some(key)
 }
 
 async fn handle_run(
@@ -52,7 +84,7 @@ async fn handle_run(
     info!(job_id = %job_id, "Received /run request");
 
     // 1. Authentication
-    let api_key = match extract_api_key(&headers) {
+    let api_key = match validate_api_key(&headers, &state.bearer_token) {
         Some(key) => key,
         None => {
             warn!(job_id = %job_id, "Missing or invalid Authorization header");
@@ -275,22 +307,51 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_extract_api_key_valid() {
+    fn test_validate_api_key_valid_no_expected() {
         let mut headers = HeaderMap::new();
         headers.insert("authorization", "Bearer test-key-123".parse().unwrap());
-        assert_eq!(extract_api_key(&headers), Some("test-key-123".to_string()));
+        assert_eq!(
+            validate_api_key(&headers, &None),
+            Some("test-key-123".to_string())
+        );
     }
 
     #[test]
-    fn test_extract_api_key_missing() {
+    fn test_validate_api_key_valid_matching() {
+        let mut headers = HeaderMap::new();
+        headers.insert("authorization", "Bearer secret-token".parse().unwrap());
+        let expected = Some("secret-token".to_string());
+        assert_eq!(
+            validate_api_key(&headers, &expected),
+            Some("secret-token".to_string())
+        );
+    }
+
+    #[test]
+    fn test_validate_api_key_wrong_token() {
+        let mut headers = HeaderMap::new();
+        headers.insert("authorization", "Bearer wrong-token".parse().unwrap());
+        let expected = Some("correct-token".to_string());
+        assert_eq!(validate_api_key(&headers, &expected), None);
+    }
+
+    #[test]
+    fn test_validate_api_key_missing() {
         let headers = HeaderMap::new();
-        assert_eq!(extract_api_key(&headers), None);
+        assert_eq!(validate_api_key(&headers, &None), None);
     }
 
     #[test]
-    fn test_extract_api_key_wrong_scheme() {
+    fn test_validate_api_key_wrong_scheme() {
         let mut headers = HeaderMap::new();
         headers.insert("authorization", "Basic abc123".parse().unwrap());
-        assert_eq!(extract_api_key(&headers), None);
+        assert_eq!(validate_api_key(&headers, &None), None);
+    }
+
+    #[test]
+    fn test_validate_api_key_empty_bearer() {
+        let mut headers = HeaderMap::new();
+        headers.insert("authorization", "Bearer ".parse().unwrap());
+        assert_eq!(validate_api_key(&headers, &None), None);
     }
 }
