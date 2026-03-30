@@ -321,8 +321,16 @@ async fn test_end_to_end_sum_example() {
     );
     assert_eq!(json["output"]["return_value"], 5050);
     assert_eq!(json["output"]["registers"]["x0"], 5050);
-    assert!(json["benchmark"]["iterations"].as_u64().unwrap() > 0);
-    assert!(json["benchmark"]["mean_ns"].as_u64().unwrap() > 0);
+    assert!(
+        json["benchmark"]["iterations"].as_u64().unwrap() > 0,
+        "Expected iterations > 0, got benchmark: {}",
+        serde_json::to_string_pretty(&json["benchmark"]).unwrap()
+    );
+    assert!(
+        json["benchmark"]["mean_ns"].as_u64().unwrap() > 0,
+        "Expected mean_ns > 0, got benchmark: {}",
+        serde_json::to_string_pretty(&json["benchmark"]).unwrap()
+    );
 }
 
 /// Test that a timeout is enforced for an infinite loop
