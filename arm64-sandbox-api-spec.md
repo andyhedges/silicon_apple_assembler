@@ -108,6 +108,10 @@ A `README.md` must be present at the repository root. It must cover:
 
 The README is the primary entry point for new contributors and operators. It should be kept in sync with the spec as the implementation evolves.
 
+#### OpenAPI Specification
+
+An OpenAPI 3.1 spec must be present at `openapi.yaml` in the repository root. It must cover all endpoints, request/response schemas, error codes, and the `Authorization` header. The spec should be kept in sync with the implementation — it is the authoritative contract for API consumers. The README should reference it.
+
 #### Logging
 
 All log output goes to stdout in a structured format (e.g. JSON or logfmt). Each log line should include at minimum: timestamp, log level, and message. Per-request log lines should include the job ID so execution pipeline stages can be correlated. There is no log file, log rotation, or syslog integration — the process is expected to run under a supervisor (e.g. launchd) that handles log capture.
