@@ -16,6 +16,14 @@ pub struct HarnessOutput {
 /// HARNESS:rv=<i64>;n=<u64>;freq=24000000;total=<u64>;mean=<u64>;median=<u64>;min=<u64>;max=<u64>;stddev=<u64>\n
 /// <user stdout>
 /// ```
+///
+/// Timing fields are in timer ticks. The API server converts to nanoseconds:
+/// `ns = ticks * 1_000_000_000 / freq`
+///
+/// For `mean_ns`, the server computes `total_ns / n` directly rather than
+/// converting the harness's integer-divided mean_ticks. This preserves
+/// nanosecond precision for fast operations where individual iterations
+/// complete in less than one timer tick (~41ns at 24MHz).
 pub fn parse_harness_output(stdout: &str) -> Result<HarnessOutput, String> {
     // The harness line must be the first line
     let (harness_line, user_stdout) = match stdout.split_once('\n') {
@@ -34,7 +42,7 @@ pub fn parse_harness_output(stdout: &str) -> Result<HarnessOutput, String> {
     let n = get_field_u64(&fields, "n")?;
     let freq = get_field_u64(&fields, "freq")?;
     let total_ticks = get_field_u64(&fields, "total")?;
-    let mean_ticks = get_field_u64(&fields, "mean")?;
+    let _mean_ticks = get_field_u64(&fields, "mean")?;
     let median_ticks = get_field_u64(&fields, "median")?;
     let min_ticks = get_field_u64(&fields, "min")?;
     let max_ticks = get_field_u64(&fields, "max")?;
@@ -44,13 +52,22 @@ pub fn parse_harness_output(stdout: &str) -> Result<HarnessOutput, String> {
         return Err("freq cannot be zero".to_string());
     }
 
+    let total_ns = ticks_to_ns(total_ticks, freq);
+
+    // Compute mean_ns from total_ns / n for better precision.
+    // The harness computes mean in integer ticks via udiv which rounds to 0
+    // for sub-tick operations (e.g., a tight loop completing in <41ns per
+    // iteration at the 24MHz counter frequency). Computing from total_ns
+    // preserves nanosecond-level precision.
+    let mean_ns = if n > 0 { total_ns / n } else { 0 };
+
     Ok(HarnessOutput {
         return_value: rv,
         iterations: n,
         benchmark: BenchmarkStats {
             iterations: n,
-            total_ns: ticks_to_ns(total_ticks, freq),
-            mean_ns: ticks_to_ns(mean_ticks, freq),
+            total_ns,
+            mean_ns,
             median_ns: ticks_to_ns(median_ticks, freq),
             min_ns: ticks_to_ns(min_ticks, freq),
             max_ns: ticks_to_ns(max_ticks, freq),
@@ -115,7 +132,9 @@ mod tests {
         assert_eq!(result.iterations, 9000);
         assert_eq!(result.user_stdout, "Hello from user code\n");
         assert_eq!(result.benchmark.iterations, 9000);
-        // Check tick-to-ns conversion: 123 ticks * 1e9 / 24e6 = 5125 ns
+        // mean_ns is computed from total_ns / n for precision:
+        // total_ns = 1107000 * 1e9 / 24e6 = 46125000
+        // mean_ns = 46125000 / 9000 = 5125
         assert_eq!(result.benchmark.mean_ns, 5125);
     }
 
@@ -181,5 +200,19 @@ mod tests {
     fn test_parse_empty_stdout() {
         let stdout = "";
         assert!(parse_harness_output(stdout).is_err());
+    }
+
+    #[test]
+    fn test_mean_ns_precision_for_fast_operations() {
+        // Simulate a case where individual iterations are sub-tick:
+        // 9000 iterations, total = 7200 ticks (< 1 tick per iteration on average)
+        // harness reports mean=0 (udiv rounds down), but server should compute
+        // mean_ns = total_ns / n = (7200 * 1e9 / 24e6) / 9000 = 300000 / 9000 = 33
+        let stdout = "HARNESS:rv=5050;n=9000;freq=24000000;total=7200;mean=0;median=0;min=0;max=2;stddev=0\n";
+        let result = parse_harness_output(stdout).unwrap();
+        assert_eq!(result.benchmark.total_ns, 300000);
+        assert_eq!(result.benchmark.mean_ns, 33); // 300000 / 9000
+        // mean_ns > 0 even though harness reported mean=0 in ticks
+        assert!(result.benchmark.mean_ns > 0);
     }
 }
