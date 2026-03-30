@@ -9,6 +9,14 @@ A web API that accepts user-submitted ARM64v8 (AArch64) assembly source code, co
 - **`just`** — command runner ([installation](https://github.com/casey/just#installation))
 - **macOS on Apple Silicon** (M1/M2/M3/M4) — required for execution; compilation and unit tests work on any platform
 
+### Installing Dependencies with mise
+
+If you use [mise](https://mise.jdx.dev/), the included `mise.toml` will install the Rust toolchain and `just` automatically:
+
+```bash
+mise install
+```
+
 ## Building
 
 ```bash
