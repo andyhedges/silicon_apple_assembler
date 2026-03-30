@@ -162,20 +162,27 @@ fn execute_sandboxed(
     info!(job_id = job_id, "Starting sandboxed execution");
 
     // Shell wrapper sets resource limits before exec.
-    // - ulimit -t 30: CPU time ceiling (30 seconds)
-    // - ulimit -v 131072: virtual memory (128 MB)
-    // - ulimit -f 0: no file creation
-    // - ulimit -n 32: enough FDs for dyld to load shared libraries at startup
+    //
+    // Resource limits applied:
+    // - ulimit -t 30: CPU time ceiling (30 seconds absolute; per-request timeout is lower)
     // - ulimit -c 0: no core dumps
-    // Note: ulimit -u (max processes) is omitted because the shell itself needs
-    // to exec, and the sandbox profile prevents fork/exec of child processes.
+    //
+    // Limits NOT applied (and why):
+    // - ulimit -v (virtual memory): On macOS, the dyld shared cache is memory-mapped
+    //   at ~1-2 GB of virtual address space in every process. Setting ulimit -v to
+    //   128 MB causes immediate process death before main() even runs. Memory is
+    //   bounded by the sandbox profile (no mmap of new files) and the CPU time limit.
+    // - ulimit -f (file size): sandbox-exec's deny-default profile prevents file
+    //   creation. Setting ulimit -f 0 can interfere with sandbox-exec's own operation.
+    // - ulimit -u (max processes): The shell needs to exec the sandboxed binary.
+    //   The sandbox profile prevents fork/exec of child processes.
+    // - ulimit -n (open files): Set to 32 to allow dyld to open shared libraries
+    //   during process startup while still bounding resource usage.
     let script = format!(
         r#"
 ulimit -t 30
-ulimit -v 131072
-ulimit -f 0
-ulimit -n 32
 ulimit -c 0
+ulimit -n 32
 exec sandbox-exec -f "{profile}" "{binary}"
 "#,
         profile = profile_path.display(),
