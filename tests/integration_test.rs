@@ -60,7 +60,7 @@ async fn test_invalid_timeout_returns_400() {
 #[tokio::test]
 async fn test_oversized_source_returns_400() {
     let app = arm64_sandbox::api::create_router();
-    let big_source = "x".repeat(64 * 1024 + 1);
+    let big_source = "x".repeat(512 * 1024 + 1);
     let body = serde_json::json!({ "source": big_source });
 
     let req = Request::builder()
