@@ -8,6 +8,17 @@ build:
 run *ARGS:
     cargo run --release -- {{ARGS}}
 
-# Run all tests
+# Run tests — on macOS, includes ignored tests that need the native toolchain
 test:
-    cargo test
+    #!/usr/bin/env bash
+    if [[ "$(uname -s)" == "Darwin" ]]; then
+        echo "Detected macOS — running all tests including toolchain-dependent tests"
+        cargo test -- --include-ignored
+    else
+        echo "Non-macOS platform — running portable tests only (use 'just test-all' to force all)"
+        cargo test
+    fi
+
+# Run all tests unconditionally, including those gated with #[ignore]
+test-all:
+    cargo test -- --include-ignored
