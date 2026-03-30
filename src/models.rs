@@ -206,9 +206,9 @@ impl RunRequest {
         if self.source.is_empty() {
             return Err("source is required".to_string());
         }
-        // Source max 64 KB
-        if self.source.len() > 64 * 1024 {
-            return Err("source exceeds 64 KB limit".to_string());
+        // Source max 512 KB
+        if self.source.len() > 512 * 1024 {
+            return Err("source exceeds 512 KB limit".to_string());
         }
         // Entrypoint must match /^_[a-zA-Z_]\w*$/
         let re = regex::Regex::new(r"^_[a-zA-Z_]\w*$").unwrap();
@@ -279,13 +279,13 @@ mod tests {
     #[test]
     fn test_validate_source_too_large() {
         let req = RunRequest {
-            source: "x".repeat(64 * 1024 + 1),
+            source: "x".repeat(512 * 1024 + 1),
             entrypoint: "_user_entry".to_string(),
             inputs: HashMap::new(),
             iterations: 1,
             timeout_seconds: 10,
         };
-        assert!(req.validate().unwrap_err().contains("64 KB"));
+        assert!(req.validate().unwrap_err().contains("512 KB"));
     }
 
     #[test]

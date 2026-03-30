@@ -100,7 +100,7 @@ components:
         source:
           type: string
           description: ARM64 assembly source code.
-          maxLength: 65536
+          maxLength: 524288
         entrypoint:
           type: string
           description: >
