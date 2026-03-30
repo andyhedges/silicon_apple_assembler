@@ -186,6 +186,38 @@ async fn test_static_analysis_rejects_macro() {
     assert_eq!(json["error_code"], "STATIC_ANALYSIS_FAILED");
 }
 
+#[tokio::test]
+async fn test_wrong_bearer_token_returns_401() {
+    let app = arm64_sandbox::api::create_router_with_token("correct-secret");
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/run")
+        .header("content-type", "application/json")
+        .header("authorization", "Bearer wrong-secret")
+        .body(Body::from(r#"{"source": "ret"}"#))
+        .unwrap();
+
+    let response = app.oneshot(req).await.unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn test_correct_bearer_token_passes_auth() {
+    let app = arm64_sandbox::api::create_router_with_token("my-secret-token");
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/run")
+        .header("content-type", "application/json")
+        .header("authorization", "Bearer my-secret-token")
+        .body(Body::from(r#"{"source": "ret", "iterations": 0}"#))
+        .unwrap();
+
+    let response = app.oneshot(req).await.unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
 // ============================================================
 // Rate limiting test using shared real state
 // ============================================================

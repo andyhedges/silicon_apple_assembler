@@ -28,25 +28,22 @@ This runs `cargo build --release`.
 ## Running
 
 ```bash
-just run
+just run -- --bearer <your-secret-token> --port 8080
 ```
 
-By default the server listens on port 80. Use `--port` to change:
-
-```bash
-just run -- --port 8080
-```
+The `--bearer` flag is required and sets the API key that clients must provide in the `Authorization: Bearer <token>` header. Requests with a missing or non-matching token receive `401 Unauthorized`.
 
 ### CLI Options
 
 ```
 USAGE:
-    arm64-sandbox [OPTIONS]
+    arm64-sandbox [OPTIONS] --bearer <TOKEN>
 
 OPTIONS:
-    --port <PORT>    Port to listen on [default: 80]
-    -h, --help       Print help
-    -V, --version    Print version
+    --port <PORT>      Port to listen on [default: 80]
+    --bearer <TOKEN>   Required Bearer token for API authentication
+    -h, --help         Print help
+    -V, --version      Print version
 ```
 
 ## Testing
@@ -68,10 +65,10 @@ cargo test -- --ignored
 
 ## API Usage
 
-All requests require authentication via Bearer token:
+All requests require authentication via Bearer token (must match the `--bearer` value the server was started with):
 
 ```
-Authorization: Bearer <api-key>
+Authorization: Bearer <token>
 ```
 
 See [`openapi.yaml`](openapi.yaml) for the full API specification.
@@ -83,7 +80,7 @@ See [`openapi.yaml`](openapi.yaml) for the full API specification.
 ```bash
 curl -X POST http://localhost:8080/run \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer my-api-key" \
+  -H "Authorization: Bearer my-secret-token" \
   -d '{
     "source": ".global _user_entry\n.align 2\n\n_user_entry:\n    stp x29, x30, [sp, #-16]!\n    mov x29, sp\n    mov x2, #0\n    mov x3, x0\n_loop:\n    cbz x3, _done\n    add x2, x2, x3\n    sub x3, x3, #1\n    b _loop\n_done:\n    mov x0, x2\n    ldp x29, x30, [sp], #16\n    ret\n",
     "inputs": { "x0": 100 },
@@ -127,6 +124,7 @@ This computes the sum 1 + 2 + ... + 100.
 | 400 | `BINARY_VERIFICATION_FAILED` | Post-link scan found forbidden opcodes |
 | 200 | `RUNTIME_ERROR` | Process crashed (segfault, bus error, etc.) |
 | 200 | `TIMEOUT` | Process exceeded wall-clock or CPU time limit |
+| 401 | `UNAUTHORIZED` | Missing or invalid Bearer token |
 | 429 | `RATE_LIMITED` | Too many requests |
 | 503 | `EXECUTION_SLOT_BUSY` | Benchmark currently running; retry after indicated delay |
 
@@ -136,11 +134,12 @@ Security is enforced at multiple independent layers (defence in depth):
 
 | Layer | Enforces |
 |-------|----------|
+| **Bearer token authentication** | Only clients with the configured token can access the API |
 | **Static analysis** | Rejects source containing forbidden instructions (svc, mrs, msr, etc.) and restricted patterns (indirect branches, raw data in .text, macros) |
 | **Harness wrapping** | User code has no `_main`, no syscall instructions; only the harness controls program entry, exit, and I/O |
 | **Post-link binary verification** | Disassembles the final binary and scans for forbidden opcodes that may have been smuggled past source analysis |
-| **sandbox-exec** | macOS kernel sandbox denies file, network, IPC, fork, and mach port access |
-| **Resource limits** | Bounded CPU (30s), memory (128 MB), no file creation, no forking, no core dumps |
+| **sandbox-exec** | macOS kernel sandbox denies network access, file creation, process forking, and signal sending |
+| **Resource limits** | Bounded CPU (30s), no core dumps, bounded file descriptors |
 | **Wall-clock timeout** | Parent process sends SIGKILL after the configured timeout; cannot be bypassed |
 
 Each layer independently prevents a class of abuse. An attacker must defeat all layers to cause harm.

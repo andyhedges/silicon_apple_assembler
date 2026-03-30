@@ -8,6 +8,10 @@ struct Cli {
     /// Port to listen on
     #[arg(long, default_value_t = 80)]
     port: u16,
+
+    /// Required Bearer token for API authentication
+    #[arg(long)]
+    bearer: String,
 }
 
 #[tokio::main]
@@ -22,7 +26,7 @@ async fn main() {
 
     info!(port = cli.port, "Starting ARM64 Sandbox API server");
 
-    let app = api::create_router();
+    let app = api::create_router_with_token(&cli.bearer);
 
     let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", cli.port))
         .await
