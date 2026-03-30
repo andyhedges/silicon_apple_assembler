@@ -314,7 +314,11 @@ async fn test_end_to_end_sum_example() {
         .unwrap();
     let json: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
 
-    assert_eq!(json["status"], "ok");
+    assert_eq!(
+        json["status"], "ok",
+        "Expected status 'ok' but got full response: {}",
+        serde_json::to_string_pretty(&json).unwrap()
+    );
     assert_eq!(json["output"]["return_value"], 5050);
     assert_eq!(json["output"]["registers"]["x0"], 5050);
     assert!(json["benchmark"]["iterations"].as_u64().unwrap() > 0);
