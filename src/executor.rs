@@ -81,8 +81,13 @@ impl Drop for SlotGuard {
     }
 }
 
-/// Generate the sandbox-exec profile for a specific job
-fn generate_sandbox_profile(binary_path: &Path) -> String {
+/// Generate the sandbox-exec profile for a specific job.
+///
+/// The profile starts with `(deny default)` which blocks everything, then
+/// selectively allows only what the sandboxed binary needs: reading its own
+/// binary, the sandbox profile file, system libraries, and the dyld shared
+/// cache; writing to stdout/stderr/null. No network, no file creation.
+fn generate_sandbox_profile(profile_path: &Path, temp_dir: &Path) -> String {
     format!(
         r#"(version 1)
 (deny default)
@@ -90,11 +95,16 @@ fn generate_sandbox_profile(binary_path: &Path) -> String {
 ;; Allow the process to execute
 (allow process-exec)
 
-;; Allow reading the binary, system libraries, and dyld shared cache
+;; Allow reading the binary, sandbox profile, temp dir, system libraries, and dyld cache
 (allow file-read*
     (subpath "/usr/lib")
     (subpath "/System/Library")
-    (literal "{binary}")
+    (subpath "/Library/Apple/usr/lib")
+    (subpath "/private/var/db/dyld")
+    (subpath "{temp_dir}")
+    (literal "{profile}")
+    (literal "/dev/urandom")
+    (literal "/dev/null")
 )
 
 ;; Allow writing to stdout, stderr, and null
@@ -103,8 +113,15 @@ fn generate_sandbox_profile(binary_path: &Path) -> String {
     (literal "/dev/stderr")
     (literal "/dev/null")
 )
+
+;; Allow sysctl reads (needed by some system libraries during init)
+(allow sysctl-read)
+
+;; Allow mach lookups needed for basic process operation on macOS
+(allow mach-lookup)
 "#,
-        binary = binary_path.display()
+        temp_dir = temp_dir.display(),
+        profile = profile_path.display()
     )
 }
 
@@ -119,8 +136,8 @@ pub async fn execute(
     let binary_path = binary_path.to_owned();
     let temp_dir = temp_dir.to_owned();
 
-    let profile_content = generate_sandbox_profile(&binary_path);
     let profile_path = temp_dir.join("sandbox-profile.sb");
+    let profile_content = generate_sandbox_profile(&profile_path, &temp_dir);
     std::fs::write(&profile_path, &profile_content).map_err(|e| PipelineError::ServerError {
         message: format!("Failed to write sandbox profile: {}", e),
     })?;
@@ -144,14 +161,20 @@ fn execute_sandboxed(
 ) -> Result<ExecutionResult, PipelineError> {
     info!(job_id = job_id, "Starting sandboxed execution");
 
-    // Shell wrapper sets resource limits before exec
+    // Shell wrapper sets resource limits before exec.
+    // - ulimit -t 30: CPU time ceiling (30 seconds)
+    // - ulimit -v 131072: virtual memory (128 MB)
+    // - ulimit -f 0: no file creation
+    // - ulimit -n 32: enough FDs for dyld to load shared libraries at startup
+    // - ulimit -c 0: no core dumps
+    // Note: ulimit -u (max processes) is omitted because the shell itself needs
+    // to exec, and the sandbox profile prevents fork/exec of child processes.
     let script = format!(
         r#"
 ulimit -t 30
 ulimit -v 131072
 ulimit -f 0
-ulimit -n 4
-ulimit -u 1
+ulimit -n 32
 ulimit -c 0
 exec sandbox-exec -f "{profile}" "{binary}"
 "#,
