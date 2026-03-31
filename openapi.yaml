@@ -84,6 +84,39 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
 
+  /deploy:
+    post:
+      summary: Pull latest code and run deploy script
+      description: >
+        Runs `git pull` in the server-configured deploy directory. If the pull
+        succeeds, executes the server-configured shell script. Returns the output
+        of both stages. The directory and script are server-side configuration
+        (environment variables) — the caller provides no parameters.
+      operationId: deploy
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: >
+            Both stages completed. Check `status` to distinguish full success
+            (`ok`) from partial failure (`GIT_PULL_FAILED` or `SCRIPT_FAILED`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeployResponse'
+        '401':
+          description: Missing or invalid API key.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Server misconfiguration (git or script not found/executable).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
 components:
   securitySchemes:
     BearerAuth:
@@ -228,6 +261,33 @@ components:
           additionalProperties:
             type: integer
             format: int64
+
+    DeployStageOutput:
+      type: object
+      properties:
+        exit_code:
+          type: integer
+          nullable: true
+          description: Exit code of the stage, or null if the stage was not run.
+        output:
+          type: string
+          description: Combined stdout/stderr output of the stage.
+
+    DeployResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [ok, error]
+        error_code:
+          type: string
+          nullable: true
+          enum: [GIT_PULL_FAILED, SCRIPT_FAILED]
+          description: Present when status is error.
+        git_pull:
+          $ref: '#/components/schemas/DeployStageOutput'
+        script:
+          $ref: '#/components/schemas/DeployStageOutput'
 
     BenchmarkStats:
       type: object

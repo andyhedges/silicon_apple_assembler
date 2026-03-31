@@ -89,10 +89,22 @@ USAGE:
     arm64-sandbox [OPTIONS]
 
 OPTIONS:
-    --port <PORT>    Port to listen on [default: 80]
-    -h, --help       Print help
-    -V, --version    Print version
+    --port <PORT>              Port to listen on [default: 80]
+    --deploy-directory <PATH>  Directory in which to run git pull
+    --deploy-script <PATH>     Shell script to run after a successful git pull
+    -h, --help                 Print help
+    -V, --version              Print version
 ```
+
+All options can be set via environment variable. The CLI flag takes precedence over the environment variable when both are present.
+
+| Flag                  | Environment Variable | Default | Required |
+| --------------------- | -------------------- | ------- | -------- |
+| `--port`              | `PORT`               | `80`    | no       |
+| `--deploy-directory`  | `DEPLOY_DIRECTORY`   | —       | yes      |
+| `--deploy-script`     | `DEPLOY_SCRIPT`      | —       | yes      |
+
+The server must exit at startup with a clear error message if any required value is absent from both the flag and the environment.
 
 #### README
 
@@ -228,6 +240,71 @@ When user code fails at runtime (crash or timeout), the API returns HTTP 200 wit
 #### Error Response — `429 Too Many Requests`
 
 Standard rate-limit response. See §7.
+
+---
+
+### 3.3 `POST /deploy`
+
+Runs `git pull` in a configured directory, then executes a configured shell script. Intended as a deployment hook. Returns the output of both operations.
+
+> **Security:** The directory and script path are **server-side configuration** — they are not accepted from the caller. The endpoint is a trigger only. This prevents arbitrary filesystem traversal or script injection. Both values are set via environment variables and the server must refuse to start if either is absent.
+
+
+#### Request Body
+
+No body required. The endpoint accepts an empty `POST`.
+
+#### Success Response — `200 OK`
+
+Returned when both `git pull` and the script exit with code `0`.
+
+```json
+{
+  "status": "ok",
+  "git_pull": {
+    "exit_code": 0,
+    "output": "Already up to date.\n"
+  },
+  "script": {
+    "exit_code": 0,
+    "output": "Build successful.\n"
+  }
+}
+```
+
+#### Partial Failure Response — `200 OK`
+
+If `git pull` fails, the script is **not run**. Both fields are always present; `script.output` is an empty string and `script.exit_code` is `null` when skipped.
+
+```json
+{
+  "status": "error",
+  "error_code": "GIT_PULL_FAILED",
+  "git_pull": {
+    "exit_code": 1,
+    "output": "error: Your local changes would be overwritten by merge.\n"
+  },
+  "script": {
+    "exit_code": null,
+    "output": ""
+  }
+}
+```
+
+If `git pull` succeeds but the script exits non-zero, both outputs are returned and `status` is `"error"` with `error_code` `"SCRIPT_FAILED"`.
+
+#### Error Responses
+
+| Condition              | HTTP Status | `error_code`       |
+| ---------------------- | ----------- | ------------------ |
+| `git pull` non-zero    | 200         | `GIT_PULL_FAILED`  |
+| Script non-zero        | 200         | `SCRIPT_FAILED`    |
+| `git` not found        | 500         | `SERVER_ERROR`     |
+| Script not found/not executable | 500 | `SERVER_ERROR`   |
+
+#### Timeout
+
+Each stage (git pull, script) is subject to a fixed server-side timeout of 300 seconds. If either exceeds this, it is killed and the response returns `TIMEOUT` with whatever output was captured before the kill.
 
 #### Error Response — `503 Service Unavailable`
 
@@ -610,6 +687,8 @@ The harness computes summary statistics from the per-iteration tick buffer in-pr
 | `BINARY_VERIFICATION_FAILED` | 400      | Post-link scan found forbidden opcodes              |
 | `RUNTIME_ERROR`           | 200*        | Process crashed (segfault, bus error, illegal instr)|
 | `TIMEOUT`                 | 200*        | Process exceeded wall-clock or CPU time limit       |
+| `GIT_PULL_FAILED`         | 200         | `git pull` exited non-zero; script was not run      |
+| `SCRIPT_FAILED`           | 200         | Script exited non-zero; git pull output also returned|
 | `EXECUTION_SLOT_BUSY`     | 503         | Execution slot occupied; retry after indicated delay|
 | `RATE_LIMITED`            | 429         | Too many requests                                   |
 | `SERVER_ERROR`            | 500         | Internal failure                                    |
