@@ -1,5 +1,7 @@
 use arm64_sandbox::api;
+use arm64_sandbox::events;
 use clap::Parser;
+use std::net::SocketAddr;
 use tracing::info;
 
 #[derive(Parser)]
@@ -34,7 +36,13 @@ async fn main() {
 
     info!(port = cli.port, "Starting ARM64 Sandbox API server");
 
-    let app = api::create_router_with_token(&cli.bearer, &cli.deploy_directory, &cli.deploy_script);
+    let event_tx = events::new_channel();
+    let app = api::create_router_with_token(
+        &cli.bearer,
+        &cli.deploy_directory,
+        &cli.deploy_script,
+        event_tx,
+    );
 
     let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", cli.port))
         .await
@@ -42,7 +50,10 @@ async fn main() {
 
     info!(port = cli.port, "Listening");
 
-    axum::serve(listener, app)
-        .await
-        .expect("Server error");
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .await
+    .expect("Server error");
 }

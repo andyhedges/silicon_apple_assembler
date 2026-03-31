@@ -1,4 +1,5 @@
 pub mod analyzer;
+pub mod events;
 pub mod api;
 pub mod compiler;
 pub mod executor;
