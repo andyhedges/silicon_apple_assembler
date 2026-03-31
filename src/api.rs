@@ -368,7 +368,7 @@ async fn handle_deploy(
 
     let git_exit = git_output.status.code();
     let git_out = combine_output(&git_output.stdout, &git_output.stderr);
-    info!(job_id = %job_id, exit_code = ?git_exit, "git pull completed");
+    info!(job_id = %job_id, exit_code = ?git_exit, output = %git_out, "git pull completed");
 
     if !git_output.status.success() {
         return (StatusCode::OK, Json(DeployResponse::git_failed(git_exit, git_out))).into_response();
@@ -407,7 +407,7 @@ async fn handle_deploy(
 
     let script_exit = script_output.status.code();
     let script_out = combine_output(&script_output.stdout, &script_output.stderr);
-    info!(job_id = %job_id, exit_code = ?script_exit, "Deploy script completed");
+    info!(job_id = %job_id, exit_code = ?script_exit, output = %script_out, "Deploy script completed");
 
     if !script_output.status.success() {
         return (

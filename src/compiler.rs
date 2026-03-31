@@ -73,13 +73,15 @@ fn assemble(job_id: &str, source: &Path, output: &Path) -> Result<(), PipelineEr
             message: format!("Failed to run assembler: {}", e),
         })?;
 
+    let stdout = String::from_utf8_lossy(&result.stdout);
+    let stderr = String::from_utf8_lossy(&result.stderr);
     if !result.status.success() {
-        let stderr = String::from_utf8_lossy(&result.stderr);
         let cleaned = strip_temp_paths(&stderr, job_id);
         error!(job_id = job_id, error = %cleaned, "Assembly failed");
         return Err(PipelineError::CompileError { message: cleaned });
     }
 
+    info!(job_id = job_id, stdout = %stdout, stderr = %stderr, "Assembly completed");
     Ok(())
 }
 
@@ -127,13 +129,15 @@ fn link(
             message: format!("Failed to run linker: {}", e),
         })?;
 
+    let stdout = String::from_utf8_lossy(&result.stdout);
+    let stderr = String::from_utf8_lossy(&result.stderr);
     if !result.status.success() {
-        let stderr = String::from_utf8_lossy(&result.stderr);
         let cleaned = strip_temp_paths(&stderr, job_id);
         error!(job_id = job_id, error = %cleaned, "Linking failed");
         return Err(PipelineError::CompileError { message: cleaned });
     }
 
+    info!(job_id = job_id, stdout = %stdout, stderr = %stderr, "Linking completed");
     Ok(())
 }
 
