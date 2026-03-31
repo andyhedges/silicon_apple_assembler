@@ -6,12 +6,20 @@ use tracing::info;
 #[command(name = "arm64-sandbox", version, about = "ARM64 Assembly Sandbox & Benchmarking API")]
 struct Cli {
     /// Port to listen on
-    #[arg(long, default_value_t = 80)]
+    #[arg(long, env = "PORT", default_value_t = 80)]
     port: u16,
 
     /// Required Bearer token for API authentication
-    #[arg(long)]
+    #[arg(long, env = "BEARER_TOKEN")]
     bearer: String,
+
+    /// Directory in which to run git pull for the /deploy endpoint
+    #[arg(long, env = "DEPLOY_DIRECTORY")]
+    deploy_directory: String,
+
+    /// Shell script to execute after a successful git pull
+    #[arg(long, env = "DEPLOY_SCRIPT")]
+    deploy_script: String,
 }
 
 #[tokio::main]
@@ -26,7 +34,7 @@ async fn main() {
 
     info!(port = cli.port, "Starting ARM64 Sandbox API server");
 
-    let app = api::create_router_with_token(&cli.bearer);
+    let app = api::create_router_with_token(&cli.bearer, &cli.deploy_directory, &cli.deploy_script);
 
     let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", cli.port))
         .await

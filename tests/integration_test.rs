@@ -188,7 +188,7 @@ async fn test_static_analysis_rejects_macro() {
 
 #[tokio::test]
 async fn test_wrong_bearer_token_returns_401() {
-    let app = arm64_sandbox::api::create_router_with_token("correct-secret");
+    let app = arm64_sandbox::api::create_router_with_token("correct-secret", "", "");
 
     let req = Request::builder()
         .method("POST")
@@ -204,7 +204,7 @@ async fn test_wrong_bearer_token_returns_401() {
 
 #[tokio::test]
 async fn test_correct_bearer_token_passes_auth() {
-    let app = arm64_sandbox::api::create_router_with_token("my-secret-token");
+    let app = arm64_sandbox::api::create_router_with_token("my-secret-token", "", "");
 
     let req = Request::builder()
         .method("POST")

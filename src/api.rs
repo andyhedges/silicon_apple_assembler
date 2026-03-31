@@ -1,7 +1,7 @@
 use axum::{
     extract::State,
     http::{HeaderMap, StatusCode},
-    response::IntoResponse,
+    response::{IntoResponse, Response},
     routing::post,
     Json, Router,
 };
@@ -13,7 +13,7 @@ use crate::analyzer;
 use crate::compiler;
 use crate::executor::ExecutionSlot;
 use crate::harness;
-use crate::models::{OutputData, PipelineError, RunRequest, RunResponse};
+use crate::models::{DeployResponse, OutputData, PipelineError, RunRequest, RunResponse};
 use crate::wire_format;
 
 /// Shared application state
@@ -22,19 +22,26 @@ pub struct AppState {
     pub execution_slot: Arc<ExecutionSlot>,
     /// The expected Bearer token. If None, any non-empty token is accepted.
     pub bearer_token: Option<String>,
+    /// Directory in which to run `git pull` for POST /deploy.
+    pub deploy_directory: String,
+    /// Shell script to execute after a successful git pull.
+    pub deploy_script: String,
 }
 
-/// Create a router with a specific required Bearer token.
+/// Create a router with a specific required Bearer token and deploy configuration.
 /// Requests must include `Authorization: Bearer <token>` matching this value.
-pub fn create_router_with_token(token: &str) -> Router {
+pub fn create_router_with_token(token: &str, deploy_directory: &str, deploy_script: &str) -> Router {
     let state = Arc::new(AppState {
         rate_limiter: crate::rate_limiter::RateLimiter::new(),
         execution_slot: Arc::new(ExecutionSlot::new()),
         bearer_token: Some(token.to_string()),
+        deploy_directory: deploy_directory.to_string(),
+        deploy_script: deploy_script.to_string(),
     });
 
     Router::new()
         .route("/run", post(handle_run))
+        .route("/deploy", post(handle_deploy))
         .with_state(state)
 }
 
@@ -44,10 +51,13 @@ pub fn create_router() -> Router {
         rate_limiter: crate::rate_limiter::RateLimiter::new(),
         execution_slot: Arc::new(ExecutionSlot::new()),
         bearer_token: None,
+        deploy_directory: String::new(),
+        deploy_script: String::new(),
     });
 
     Router::new()
         .route("/run", post(handle_run))
+        .route("/deploy", post(handle_deploy))
         .with_state(state)
 }
 
@@ -300,6 +310,130 @@ async fn handle_run(
         StatusCode::OK,
         Json(RunResponse::success(output, harness_output.benchmark)),
     )
+}
+
+async fn handle_deploy(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Response {
+    let job_id = uuid::Uuid::new_v4().to_string();
+    info!(job_id = %job_id, "Received /deploy request");
+
+    // 1. Authentication
+    if validate_api_key(&headers, &state.bearer_token).is_none() {
+        warn!(job_id = %job_id, "Missing or invalid Authorization header");
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(RunResponse::error("UNAUTHORIZED", "Missing or invalid API key")),
+        )
+            .into_response();
+    }
+
+    // 2. Check deploy config is present
+    if state.deploy_directory.is_empty() || state.deploy_script.is_empty() {
+        error!(job_id = %job_id, "Deploy directory or script not configured");
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(RunResponse::error("SERVER_ERROR", "Deploy not configured on this server")),
+        )
+            .into_response();
+    }
+
+    // 3. Run git pull
+    info!(job_id = %job_id, directory = %state.deploy_directory, "Running git pull");
+    let git_result = tokio::time::timeout(
+        std::time::Duration::from_secs(300),
+        tokio::process::Command::new("git")
+            .args(["pull"])
+            .current_dir(&state.deploy_directory)
+            .output(),
+    )
+    .await;
+
+    let git_output = match git_result {
+        Err(_) => {
+            warn!(job_id = %job_id, "git pull timed out");
+            return (StatusCode::OK, Json(DeployResponse::git_timeout())).into_response();
+        }
+        Ok(Err(e)) => {
+            error!(job_id = %job_id, error = %e, "Failed to spawn git");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(RunResponse::error("SERVER_ERROR", &format!("Failed to run git: {}", e))),
+            )
+                .into_response();
+        }
+        Ok(Ok(output)) => output,
+    };
+
+    let git_exit = git_output.status.code();
+    let git_out = combine_output(&git_output.stdout, &git_output.stderr);
+    info!(job_id = %job_id, exit_code = ?git_exit, "git pull completed");
+
+    if !git_output.status.success() {
+        return (StatusCode::OK, Json(DeployResponse::git_failed(git_exit, git_out))).into_response();
+    }
+
+    // 4. Run deploy script
+    info!(job_id = %job_id, script = %state.deploy_script, "Running deploy script");
+    let script_result = tokio::time::timeout(
+        std::time::Duration::from_secs(300),
+        tokio::process::Command::new("sh")
+            .arg(&state.deploy_script)
+            .current_dir(&state.deploy_directory)
+            .output(),
+    )
+    .await;
+
+    let script_output = match script_result {
+        Err(_) => {
+            warn!(job_id = %job_id, "Deploy script timed out");
+            return (StatusCode::OK, Json(DeployResponse::script_timeout(git_exit, git_out)))
+                .into_response();
+        }
+        Ok(Err(e)) => {
+            error!(job_id = %job_id, error = %e, "Failed to spawn deploy script");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(RunResponse::error(
+                    "SERVER_ERROR",
+                    &format!("Failed to run script: {}", e),
+                )),
+            )
+                .into_response();
+        }
+        Ok(Ok(output)) => output,
+    };
+
+    let script_exit = script_output.status.code();
+    let script_out = combine_output(&script_output.stdout, &script_output.stderr);
+    info!(job_id = %job_id, exit_code = ?script_exit, "Deploy script completed");
+
+    if !script_output.status.success() {
+        return (
+            StatusCode::OK,
+            Json(DeployResponse::script_failed(git_exit, git_out, script_exit, script_out)),
+        )
+            .into_response();
+    }
+
+    (
+        StatusCode::OK,
+        Json(DeployResponse::success(git_exit, git_out, script_exit, script_out)),
+    )
+        .into_response()
+}
+
+/// Combine stdout and stderr bytes into a single UTF-8 string.
+fn combine_output(stdout: &[u8], stderr: &[u8]) -> String {
+    let out = String::from_utf8_lossy(stdout);
+    let err = String::from_utf8_lossy(stderr);
+    match (out.is_empty(), err.is_empty()) {
+        (true, true) => String::new(),
+        (false, true) => out.into_owned(),
+        (true, false) => err.into_owned(),
+        (false, false) => format!("{}{}", out, err),
+    }
 }
 
 #[cfg(test)]

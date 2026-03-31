@@ -199,6 +199,87 @@ impl RunResponse {
     }
 }
 
+/// Output from a single stage of the deploy pipeline
+#[derive(Debug, Serialize)]
+pub struct DeployStageOutput {
+    pub exit_code: Option<i32>,
+    pub output: String,
+}
+
+/// Response body for POST /deploy
+#[derive(Debug, Serialize)]
+pub struct DeployResponse {
+    pub status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error_code: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+    pub git_pull: DeployStageOutput,
+    pub script: DeployStageOutput,
+}
+
+impl DeployResponse {
+    fn skipped() -> DeployStageOutput {
+        DeployStageOutput { exit_code: None, output: String::new() }
+    }
+
+    pub fn success(
+        git_exit: Option<i32>, git_out: String,
+        script_exit: Option<i32>, script_out: String,
+    ) -> Self {
+        Self {
+            status: "ok".to_string(),
+            error_code: None,
+            message: None,
+            git_pull: DeployStageOutput { exit_code: git_exit, output: git_out },
+            script: DeployStageOutput { exit_code: script_exit, output: script_out },
+        }
+    }
+
+    pub fn git_failed(exit_code: Option<i32>, output: String) -> Self {
+        Self {
+            status: "error".to_string(),
+            error_code: Some("GIT_PULL_FAILED".to_string()),
+            message: Some("git pull exited with non-zero status".to_string()),
+            git_pull: DeployStageOutput { exit_code, output },
+            script: Self::skipped(),
+        }
+    }
+
+    pub fn script_failed(
+        git_exit: Option<i32>, git_out: String,
+        script_exit: Option<i32>, script_out: String,
+    ) -> Self {
+        Self {
+            status: "error".to_string(),
+            error_code: Some("SCRIPT_FAILED".to_string()),
+            message: Some("Deploy script exited with non-zero status".to_string()),
+            git_pull: DeployStageOutput { exit_code: git_exit, output: git_out },
+            script: DeployStageOutput { exit_code: script_exit, output: script_out },
+        }
+    }
+
+    pub fn git_timeout() -> Self {
+        Self {
+            status: "error".to_string(),
+            error_code: Some("TIMEOUT".to_string()),
+            message: Some("git pull exceeded the 300s timeout".to_string()),
+            git_pull: DeployStageOutput { exit_code: None, output: String::new() },
+            script: Self::skipped(),
+        }
+    }
+
+    pub fn script_timeout(git_exit: Option<i32>, git_out: String) -> Self {
+        Self {
+            status: "error".to_string(),
+            error_code: Some("TIMEOUT".to_string()),
+            message: Some("Deploy script exceeded the 300s timeout".to_string()),
+            git_pull: DeployStageOutput { exit_code: git_exit, output: git_out },
+            script: DeployStageOutput { exit_code: None, output: String::new() },
+        }
+    }
+}
+
 /// Validation for RunRequest
 impl RunRequest {
     pub fn validate(&self) -> Result<(), String> {
