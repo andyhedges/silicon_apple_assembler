@@ -8,7 +8,7 @@ use axum::{
 use serde_json::json;
 use std::collections::HashMap;
 use std::convert::Infallible;
-use std::net::SocketAddr;
+use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::StreamExt as _;
@@ -82,14 +82,38 @@ pub fn create_router() -> Router {
         .with_state(state)
 }
 
+/// Returns true if the IP is within 192.168.0.0/17 (192.168.0.0 – 192.168.127.255).
+fn in_console_cidr(ip: &str) -> bool {
+    let Ok(addr) = ip.parse::<Ipv4Addr>() else { return false };
+    let network = u32::from(Ipv4Addr::new(192, 168, 0, 0));
+    let mask = !0u32 << (32 - 17);
+    (u32::from(addr) & mask) == (network & mask)
+}
+
 /// Serve the live activity dashboard.
-async fn handle_dashboard() -> impl IntoResponse {
-    Html(DASHBOARD_HTML)
+async fn handle_dashboard(
+    connect_info: Option<ConnectInfo<SocketAddr>>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    let ip = resolve_ip(connect_info, &headers);
+    if !ip.as_deref().map(in_console_cidr).unwrap_or(false) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    Html(DASHBOARD_HTML).into_response()
 }
 
 /// Server-Sent Events stream for the live dashboard.
-async fn handle_events(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+async fn handle_events(
+    State(state): State<Arc<AppState>>,
+    connect_info: Option<ConnectInfo<SocketAddr>>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
     use axum::response::sse::{Event, KeepAlive, Sse};
+
+    let ip = resolve_ip(connect_info, &headers);
+    if !ip.as_deref().map(in_console_cidr).unwrap_or(false) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
 
     let rx = state.event_tx.subscribe();
     let stream = BroadcastStream::new(rx).filter_map(|result| {
@@ -99,7 +123,7 @@ async fn handle_events(State(state): State<Arc<AppState>>) -> impl IntoResponse 
         });
         item
     });
-    Sse::new(stream).keep_alive(KeepAlive::default())
+    Sse::new(stream).keep_alive(KeepAlive::default()).into_response()
 }
 
 /// Extract and validate API key from Authorization header.
