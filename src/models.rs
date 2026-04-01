@@ -273,7 +273,7 @@ impl DeployResponse {
         Self {
             status: "error".to_string(),
             error_code: Some("TIMEOUT".to_string()),
-            message: Some("Deploy script exceeded the 300s timeout".to_string()),
+            message: Some("Deploy script exceeded the 600s timeout".to_string()),
             git_pull: DeployStageOutput { exit_code: git_exit, output: git_out },
             script: DeployStageOutput { exit_code: None, output: String::new() },
         }
@@ -306,10 +306,10 @@ impl RunRequest {
                 self.iterations
             ));
         }
-        // Timeout: 1–30
-        if self.timeout_seconds < 1 || self.timeout_seconds > 30 {
+        // Timeout: 1–600
+        if self.timeout_seconds < 1 || self.timeout_seconds > 600 {
             return Err(format!(
-                "timeout_seconds must be between 1 and 30, got {}",
+                "timeout_seconds must be between 1 and 600, got {}",
                 self.timeout_seconds
             ));
         }
@@ -437,7 +437,7 @@ mod tests {
             entrypoint: "_user_entry".to_string(),
             inputs: HashMap::new(),
             iterations: 1,
-            timeout_seconds: 31,
+            timeout_seconds: 601,
         };
         assert!(req.validate().unwrap_err().contains("timeout_seconds"));
     }

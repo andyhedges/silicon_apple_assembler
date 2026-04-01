@@ -163,7 +163,7 @@ fn execute_sandboxed(
     // Shell wrapper sets resource limits before exec.
     //
     // Resource limits applied:
-    // - ulimit -t 30: CPU time ceiling (30 seconds absolute; per-request timeout is lower)
+    // - ulimit -t 600: CPU time ceiling (10 minutes absolute; per-request timeout is lower)
     // - ulimit -c 0: no core dumps
     // - ulimit -n 32: enough FDs for dyld shared library loading, bounded for safety
     //
@@ -177,7 +177,7 @@ fn execute_sandboxed(
     //   The sandbox profile denies process-fork.
     let script = format!(
         r#"
-ulimit -t 30
+ulimit -t 600
 ulimit -c 0
 ulimit -n 32
 exec sandbox-exec -f "{profile}" "{binary}"

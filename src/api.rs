@@ -563,7 +563,7 @@ async fn handle_deploy(
         &format!("Running {}", state.deploy_script), json!({}));
 
     let script_result = tokio::time::timeout(
-        std::time::Duration::from_secs(300),
+        std::time::Duration::from_secs(600),
         tokio::process::Command::new("sh")
             .arg(&state.deploy_script)
             .current_dir(&state.deploy_directory)
@@ -575,7 +575,7 @@ async fn handle_deploy(
         Err(_) => {
             warn!(job_id = %job_id, "Deploy script timed out");
             emit(&state.event_tx, "warn", "script_timeout", Some(&job_id), ip.as_deref(),
-                "Deploy script timed out after 300s", json!({}));
+                "Deploy script timed out after 600s", json!({}));
             return (StatusCode::OK, Json(DeployResponse::script_timeout(git_exit, git_out)))
                 .into_response();
         }
